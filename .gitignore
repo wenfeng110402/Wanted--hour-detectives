@@ -1,3 +1,1 @@
-train.csv
-val_part.csv
-train_part.csv
+*.csv
