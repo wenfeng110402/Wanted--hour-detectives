@@ -1459,3 +1459,120 @@ for col in cat_cols:
 ```
 
 这个坑在阶段 4 写 `predict.py` 时一定会遇到，先记着。
+
+---
+
+## 19. 第 19 格的 bug：为什么不能对所有 object 列用同一个 map
+
+### 19.1 你写的代码
+
+```python
+for col in [c for c in X.columns if X[c].dtype == object]:
+    X[col] = X[col].map({True: 1, False: 0, 'True': 1, 'False': 0, 'nan': np.nan})
+```
+
+### 19.2 问题在哪
+
+`[c for c in X.columns if X[c].dtype == object]` 会选出 **12 列**，不只是那 5 个假布尔：
+
+```
+假布尔（5 个）：
+  has_custom_art, is_mobile_responsive, is_multiplayer,
+  mentions_ai_api, is_clone_or_tutorial
+
+真文字（7 个）：
+  commit_cadence, primary_language, framework, hosting_type,
+  project_category, author_prior_projects, author_account_age_years
+```
+
+`map` 的规则是：**字典里没有的值，一律变成 NaN**。
+
+所以 `'daily'`、`'Python'`、`'nextjs'` 这些值在字典里找不到，全部变成 NaN。
+
+### 19.3 实测后果
+
+```
+commit_cadence:          非空值 0 / 4500   ← 整列被毁
+primary_language:        非空值 0 / 4500   ← 整列被毁
+framework:               非空值 0 / 4500   ← 整列被毁
+hosting_type:            非空值 0 / 4500   ← 整列被毁
+project_category:        非空值 0 / 4500   ← 整列被毁
+author_prior_projects:   非空值 0 / 4500   ← 整列被毁
+author_account_age_years:非空值 0 / 4500   ← 整列被毁
+
+总 NaN 数：39271
+```
+
+**7 列信息全部丢失。** 而且因为 `dtype` 变成了 float，`[c for c in X.columns if X[c].dtype == object]` 返回 `[]`，
+看起来「处理完了」，其实是「全毁了」。
+
+### 19.4 教训
+
+> **`map` 是「白名单」操作：字典里没写的值会被丢掉。**
+> 所以 `map` 只能用在「我知道这一列所有可能的值」的情况下。
+
+### 19.5 正确写法：分三类，分别处理
+
+```python
+# 第 1 类：假布尔（5 列）
+fake_bool = ['has_custom_art', 'is_mobile_responsive', 'is_multiplayer',
+             'mentions_ai_api', 'is_clone_or_tutorial']
+for col in fake_bool:
+    X[col] = X[col].map({True: 1, False: 0, 'True': 1, 'False': 0}).fillna(0).astype(int)
+
+# 第 2 类：序数（2 列）
+X['author_prior_projects'] = X['author_prior_projects'].map(
+    {'0': 0, '1-2': 1, '3-5': 2, '6+': 3})
+X['author_account_age_years'] = X['author_account_age_years'].map(
+    {'<1': 0, '1-2': 1, '3-5': 2, '6+': 3})
+
+# 第 3 类：真分类（5 列）
+cats = ['commit_cadence', 'primary_language', 'framework',
+        'hosting_type', 'project_category']
+for col in cats:
+    X[col] = X[col].astype('category')
+
+# 最后：bool → int
+for col in X.columns:
+    if X[col].dtype == bool:
+        X[col] = X[col].astype(int)
+```
+
+### 19.6 为什么假布尔要加 `.fillna(0)`
+
+因为 `map` 之后空值还是空值。`fillna(0)` 把空值当 False 处理。
+
+**为什么空值当 False 合理**：`is_mobile_responsive` 空着，通常意味着「没有网站，所以谈不上响应式」，等价于 False。
+
+### 19.7 验证结果
+
+```
+剩余 object 列: []
+总 NaN: 6338
+NaN 分布:
+  churn_ratio                   21
+  pct_code_in_first_commit     186
+  pct_primary_language         194
+  avg_file_length              194
+  comment_line_ratio           194
+  page_weight_kb              1349
+  num_js_files_loaded         1423
+  num_internal_pages          1423
+  load_time_ms                1349
+  project_category               5
+inf: 0
+```
+
+**注意**：还剩 6338 个 NaN，这是**正常的**——这些是原始数据本来就缺的。
+LightGBM 能自动处理 NaN，不用管。
+
+但 `project_category` 有 5 个 NaN，因为它是 `category` 类型，NaN 会被当成一个独立类别，也没问题。
+
+### 19.8 重要：X 已经被污染了
+
+你第 19 格已经执行过（`execution_count: 12`），所以**内存里的 X 已经被毁了**。
+
+**必须从第 15 格重新执行**，把 X 重新造出来，再跑正确的处理代码。
+
+> 这也是 notebook 的一个坑：单元格可以乱序执行，内存状态和你看到的代码顺序可能不一致。
+> **养成习惯：改完代码后，从定义数据的那一格开始，按顺序全部重跑一遍。**
