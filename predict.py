@@ -103,7 +103,7 @@ def main():
     )
     model.fit(X_train, np.log1p(y))
 
-    pred = np.expm1(model.predict(X_test))
+    pred = np.expm1(model.predict(X_test)) 
     pred = np.clip(pred, 0.1, HOURS_CAP)   # 下限防 0
 
     out = pd.DataFrame({ID: test[ID].values, TARGET: pred})
