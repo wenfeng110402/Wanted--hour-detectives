@@ -128,13 +128,6 @@ def main():
         preds.append(np.expm1(model.predict(X_test)))
 
     pred = np.mean(preds, axis=0)
-
-    # 物理直觉修正：一天合理工时约 5~8 小时，跨多天的项目按天数放大。
-    # 大项目被系统性低估，这里用「活跃天数」给一个温和的上限，
-    # 只压掉明显离谱的预测，不碰正常值。
-    active_days = X_test["active_commit_days"].clip(lower=1).values
-    pred = np.minimum(pred, active_days * 8.0)
-
     pred = np.clip(pred, 0.1, HOURS_CAP)
 
     out = pd.DataFrame({ID: test[ID].values, TARGET: pred})
