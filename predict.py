@@ -109,25 +109,18 @@ def main():
     # 列顺序必须和训练时完全一致
     X_test = X_test.reindex(columns=X_train.columns)
 
-    # 5 个 seed 各训一个模型再平均，降低单次训练的随机波动
-    SEEDS = [42, 7, 2024, 123, 999]
-    preds = []
-    for seed in SEEDS:
-        model = lgb.LGBMRegressor(
-            n_estimators=500,
-            learning_rate=0.05,
-            num_leaves=7,
-            min_child_samples=20,
-            colsample_bytree=0.5,   # 每棵树只看一半特征，抗过拟合
-            reg_lambda=10.0,        # L2 正则
-            n_jobs=-1,
-            verbose=-1,
-            random_state=seed,
-        )
-        model.fit(X_train, np.log1p(y))
-        preds.append(np.expm1(model.predict(X_test)))
+    model = lgb.LGBMRegressor(
+        n_estimators=500,
+        learning_rate=0.05,
+        num_leaves=7,
+        min_child_samples=20,
+        n_jobs=-1,
+        verbose=-1,
+        random_state=42,
+    )
+    model.fit(X_train, np.log1p(y))
 
-    pred = np.mean(preds, axis=0)
+    pred = np.expm1(model.predict(X_test))
     pred = np.clip(pred, 0.1, HOURS_CAP)
 
     out = pd.DataFrame({ID: test[ID].values, TARGET: pred})
