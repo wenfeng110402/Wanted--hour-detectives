@@ -1,3 +1,12 @@
+"""Hack Club Hour Detective - prediction script.
+
+用法:
+    python predict.py
+
+要求 train.csv 和 test.csv 与本文件同目录。
+输出 predictions.csv，列名严格为 project_id,hours_spent
+"""
+
 import numpy as np
 import pandas as pd
 import lightgbm as lgb
@@ -20,23 +29,6 @@ ORDINAL = {
 }
 
 CATS = ["commit_cadence", "primary_language", "framework", "hosting_type", "project_category"]
-
-# 按特征重要性选出的 top 40 特征（全量数据上 LightGBM 计算）
-TOP40 = [
-    "description_word_count", "project_span_days", "median_lines_per_commit",
-    "active_commit_days", "primary_language", "suspicious_speed",
-    "comment_line_ratio", "pct_commits_weekend", "pct_code_in_first_commit",
-    "num_commits", "avg_commit_msg_length", "hosting_type", "avg_file_length",
-    "lines_of_code", "page_weight_kb", "num_source_files",
-    "pct_generic_commit_msgs", "readme_word_count", "pct_primary_language",
-    "asset_size_mb", "framework", "churn_ratio", "max_lines_in_one_commit",
-    "num_image_files", "lines_added_total", "pct_commits_late_night",
-    "readme_num_headings", "num_merge_commits", "load_time_ms",
-    "num_commit_authors", "stars", "num_internal_pages",
-    "author_prior_projects", "project_category", "num_dependencies",
-    "num_directories", "lines_deleted_total", "num_js_files_loaded",
-    "max_dir_depth", "readme_num_images",
-]
 
 
 def build_features(df, feature_cols, categories=None):
@@ -117,28 +109,18 @@ def main():
     # 列顺序必须和训练时完全一致
     X_test = X_test.reindex(columns=X_train.columns)
 
-    # 只用 top 40 特征，减少噪声、提升泛化
-    X_train = X_train[TOP40]
-    X_test = X_test[TOP40]
+    model = lgb.LGBMRegressor(
+        n_estimators=500,
+        learning_rate=0.05,
+        num_leaves=7,
+        min_child_samples=20,
+        n_jobs=-1,
+        verbose=-1,
+        random_state=42,
+    )
+    model.fit(X_train, np.log1p(y))
 
-    # 5 个 seed 各训一个模型再平均，降低随机波动
-    SEEDS = [42, 7, 2024, 123, 999]
-    preds = []
-    for seed in SEEDS:
-        model = lgb.LGBMRegressor(
-            n_estimators=500,
-            learning_rate=0.05,
-            num_leaves=7,
-            min_child_samples=20,
-            colsample_bytree=0.5,   # 每棵树只看一半特征，抗过拟合
-            n_jobs=-1,
-            verbose=-1,
-            random_state=seed,
-        )
-        model.fit(X_train, np.log1p(y))
-        preds.append(np.expm1(model.predict(X_test)))
-
-    pred = np.mean(preds, axis=0)
+    pred = np.expm1(model.predict(X_test))
     pred = np.clip(pred, 0.1, HOURS_CAP)
 
     out = pd.DataFrame({ID: test[ID].values, TARGET: pred})
