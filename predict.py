@@ -82,19 +82,23 @@ def main():
     # 列顺序对齐
     X_test = X_test.reindex(columns=X_train.columns)
 
-    model = CatBoostRegressor(
-        cat_features=CAT_COLS,
-        iterations=2130,
-        learning_rate=0.03,
-        depth=8,
-        l2_leaf_reg=5,
-        rsm=0.5,
-        random_seed=42,
-        verbose=0,
-    )
-    model.fit(X_train, np.log1p(y))
+    seeds = [42, 2024, 777]
+    pred_log = np.zeros(len(X_test))
+    for seed in seeds:
+        model = CatBoostRegressor(
+            cat_features=CAT_COLS,
+            iterations=2000,
+            learning_rate=0.03,
+            depth=8,
+            l2_leaf_reg=10,
+            rsm=0.4,
+            random_seed=seed,
+            verbose=0,
+        )
+        model.fit(X_train, np.log1p(y))
+        pred_log += model.predict(X_test) / len(seeds)
 
-    pred = np.expm1(model.predict(X_test))
+    pred = np.expm1(pred_log)
     pred = np.clip(pred, 0.1, HOURS_CAP)
 
     out = pd.DataFrame({ID: test[ID].values, TARGET: pred})
