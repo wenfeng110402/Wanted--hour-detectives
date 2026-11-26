@@ -10,6 +10,10 @@
 import numpy as np
 import pandas as pd
 from catboost import CatBoostRegressor
+import lightgbm as lgb
+import xgboost as xgb
+from sklearn.metrics import root_mean_squared_log_error
+from sklearn.model_selection import StratifiedKFold
 
 TARGET = "hours_spent"
 ID = "project_id"
@@ -69,11 +73,17 @@ def prepare(X):
     return add_features(clean(X))
 
 
+def eval_log_rmsle(y_true, log_pred):
+    pred = np.clip(np.expm1(log_pred), 0.1, HOURS_CAP)
+    return root_mean_squared_log_error(y_true, pred)
+
+
 def main():
     train = pd.read_csv("train.csv")
     test = pd.read_csv("test.csv")
 
     y = train[TARGET].values
+    y_log = np.log1p(y)
     # 特征列 = test.csv 的列（去掉 project_id），再和 train 取交集
     feature_cols = [c for c in test.columns if c != ID and c in train.columns]
     X_train = prepare(train[feature_cols])
@@ -82,20 +92,96 @@ def main():
     # 列顺序对齐
     X_test = X_test.reindex(columns=X_train.columns)
 
-    model = CatBoostRegressor(
-        cat_features=CAT_COLS,
-        iterations=2130,
-        learning_rate=0.03,
-        depth=8,
-        l2_leaf_reg=5,
-        rsm=0.5,
-        random_seed=42,
-        verbose=0,
-    )
-    model.fit(X_train, np.log1p(y))
+    X_train_tree = X_train.copy()
+    X_test_tree = X_test.copy()
+    for c in CAT_COLS:
+        X_train_tree[c] = X_train_tree[c].astype("category")
+        X_test_tree[c] = X_test_tree[c].astype("category")
 
-    pred = np.expm1(model.predict(X_test))
-    pred = np.clip(pred, 0.1, HOURS_CAP)
+    stratify_col = (
+        train["hours_bucket"]
+        if "hours_bucket" in train.columns
+        else pd.qcut(y_log, q=5, labels=False)
+    )
+    kf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+    oof_cb = np.zeros(len(X_train))
+    oof_lgb = np.zeros(len(X_train))
+    oof_xgb = np.zeros(len(X_train))
+    test_cb = np.zeros(len(X_test))
+    test_lgb = np.zeros(len(X_test))
+    test_xgb = np.zeros(len(X_test))
+
+    for fold, (tr_idx, va_idx) in enumerate(kf.split(X_train, stratify_col)):
+        cb = CatBoostRegressor(
+            cat_features=CAT_COLS,
+            iterations=3000,
+            learning_rate=0.03,
+            depth=8,
+            l2_leaf_reg=5,
+            rsm=0.5,
+            random_seed=42,
+            verbose=0,
+        )
+        cb.fit(
+            X_train.iloc[tr_idx], y_log[tr_idx],
+            eval_set=(X_train.iloc[va_idx], y_log[va_idx]),
+            early_stopping_rounds=200,
+        )
+        oof_cb[va_idx] = cb.predict(X_train.iloc[va_idx])
+        test_cb += cb.predict(X_test) / kf.n_splits
+
+        lg = lgb.LGBMRegressor(
+            n_estimators=3000,
+            learning_rate=0.02,
+            num_leaves=15,
+            min_child_samples=20,
+            subsample=0.8,
+            subsample_freq=1,
+            colsample_bytree=0.7,
+            reg_alpha=1.0,
+            reg_lambda=5.0,
+            random_state=42,
+            verbose=-1,
+        )
+        lg.fit(
+            X_train_tree.iloc[tr_idx], y_log[tr_idx],
+            eval_set=[(X_train_tree.iloc[va_idx], y_log[va_idx])],
+            callbacks=[lgb.early_stopping(100, verbose=False)],
+        )
+        oof_lgb[va_idx] = lg.predict(X_train_tree.iloc[va_idx])
+        test_lgb += lg.predict(X_test_tree) / kf.n_splits
+
+        xg = xgb.XGBRegressor(
+            n_estimators=3000,
+            learning_rate=0.02,
+            max_depth=5,
+            min_child_weight=10,
+            subsample=0.8,
+            colsample_bytree=0.6,
+            reg_alpha=1.0,
+            reg_lambda=5.0,
+            enable_categorical=True,
+            tree_method="hist",
+            early_stopping_rounds=100,
+            random_state=42,
+        )
+        xg.fit(
+            X_train_tree.iloc[tr_idx], y_log[tr_idx],
+            eval_set=[(X_train_tree.iloc[va_idx], y_log[va_idx])],
+            verbose=False,
+        )
+        oof_xgb[va_idx] = xg.predict(X_train_tree.iloc[va_idx])
+        test_xgb += xg.predict(X_test_tree) / kf.n_splits
+
+    w_cb, w_lgb, w_xgb = 0.40, 0.05, 0.55
+    oof_blend = w_cb * oof_cb + w_lgb * oof_lgb + w_xgb * oof_xgb
+    test_blend = w_cb * test_cb + w_lgb * test_lgb + w_xgb * test_xgb
+
+    print(f"OOF RMSLE - CB: {eval_log_rmsle(y, oof_cb):.5f} | LGB: {eval_log_rmsle(y, oof_lgb):.5f} | XGB: {eval_log_rmsle(y, oof_xgb):.5f}")
+    print(f"OOF RMSLE - Ensemble (0.40 CB + 0.05 LGB + 0.55 XGB): {eval_log_rmsle(y, oof_blend):.5f}")
+
+    pred = np.clip(np.expm1(test_blend), 0.1, HOURS_CAP)
 
     out = pd.DataFrame({ID: test[ID].values, TARGET: pred})
     out.to_csv("predictions.csv", index=False)
