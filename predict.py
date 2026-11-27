@@ -81,6 +81,15 @@ def prepare_base(X):
     X["loc_per_file"] = div(X.lines_of_code, X.num_source_files)
     X["docs_x_desc"] = np.log1p(X.readme_word_count) * np.log1p(X.description_word_count)
 
+    # 复制粘贴嫌疑：文件极少但代码量巨大（生成/粘贴代码，非真实工作）
+    X["copy_paste"] = ((X.num_source_files <= 3) & (X.lines_of_code > 3000)).astype(float)
+
+    # README 模板嫌疑：README 词数相对代码量过高（模板 README 很长但项目很小）
+    X["readme_to_loc"] = div(X.readme_word_count, X.lines_of_code + 1)
+
+    # 文件组织度：文件多但每个小 = 精心组织；文件少但每个大 = 堆砌
+    X["files_per_loc"] = div(X.num_source_files, X.lines_of_code + 1)
+
     X = X.drop(columns=DROP_COLS, errors="ignore")
     return X
 
