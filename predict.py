@@ -81,6 +81,10 @@ def prepare_base(X):
     X["loc_per_file"] = div(X.lines_of_code, X.num_source_files)
     X["docs_x_desc"] = np.log1p(X.readme_word_count) * np.log1p(X.description_word_count)
 
+    # 战线拉长但实际投入少 = 弃坑/水项目信号（高估组 span 中位数 134 天 vs 对照组 52 天）
+    X["span_per_active_day"] = div(X.project_span_days, X.active_commit_days)
+    X["commits_per_span"] = div(X.num_commits, X.project_span_days + 1)
+
     # 复制粘贴嫌疑：文件极少但代码量巨大（生成/粘贴代码，非真实工作）
     X["copy_paste"] = ((X.num_source_files <= 3) & (X.lines_of_code > 3000)).astype(float)
 
