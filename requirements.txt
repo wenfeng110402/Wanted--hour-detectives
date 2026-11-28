@@ -1,9 +1,7 @@
-numpy
-pandas
-matplotlib
-seaborn
-scikit-learn
-xgboost
-lightgbm
-catboost
-autogluon.tabular
+numpy==2.5.5
+pandas==2.3.3
+scikit-learn==1.9.1
+xgboost==3.4.1
+lightgbm==4.7.0
+catboost==1.2.10
+autogluon.tabular==1.6.3
